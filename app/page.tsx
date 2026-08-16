@@ -14,19 +14,28 @@ type Preview = {
 type AppleResult = {
   artistName?: string;
   collectionName?: string;
+  primaryGenreName?: string;
   trackName?: string;
   previewUrl?: string;
 };
 
 const filters: ("All" | Category)[] = ["All", "Classical", "Pop", "Entrance", "Recessional"];
+const preferredTrackIds: Record<string, number> = {
+  "entrance-0-bridal-chorus-here-comes-the-bride-": 664310930,
+};
 
 function scoreResult(result: AppleResult, song: Song) {
-  const text = `${result.trackName} ${result.artistName} ${result.collectionName}`.toLowerCase();
+  const text = `${result.trackName} ${result.artistName} ${result.collectionName} ${result.primaryGenreName}`.toLowerCase();
   const significantWords = song.title.toLowerCase().split(/\W+/).filter((word) => word.length > 3);
   const titleScore = significantWords.reduce((score, word) => score + (text.includes(word) ? 3 : 0), 0);
   const stringScore = /(string|quartet|trio|duo|violin|cello|vitamin string)/.test(text) ? 12 : 0;
   const instrumentalScore = /(instrumental|wedding|classical)/.test(text) ? 3 : 0;
-  return titleScore + stringScore + instrumentalScore;
+  const composer = song.composer.split(/\s+/).at(-1)?.toLowerCase() || "";
+  const composerScore = composer.length > 3 && text.includes(composer) ? 8 : 0;
+  const classicalGenreScore = /(classical|instrumental|easy listening)/.test(result.primaryGenreName?.toLowerCase() || "")
+    ? 8
+    : song.category === "Pop" ? 0 : -8;
+  return titleScore + stringScore + instrumentalScore + composerScore + classicalGenreScore;
 }
 
 async function searchApple(term: string) {
@@ -34,6 +43,13 @@ async function searchApple(term: string) {
   if (!response.ok) throw new Error("Preview search unavailable");
   const data = await response.json() as { results: AppleResult[] };
   return data.results.filter((result) => result.previewUrl);
+}
+
+async function lookupApple(trackId: number) {
+  const response = await fetch(`https://itunes.apple.com/lookup?id=${trackId}`);
+  if (!response.ok) throw new Error("Preview lookup unavailable");
+  const data = await response.json() as { results: AppleResult[] };
+  return data.results.find((result) => result.previewUrl);
 }
 
 export default function Home() {
@@ -63,11 +79,16 @@ export default function Home() {
     setLoading(song.id);
     setErrors((current) => ({ ...current, [song.id]: false }));
     try {
-      const stringResults = await searchApple(`${song.title} ${song.composer} string quartet`);
-      let result = [...stringResults].sort((a, b) => scoreResult(b, song) - scoreResult(a, song))[0];
+      const preferredTrackId = preferredTrackIds[song.id];
+      let result = preferredTrackId ? await lookupApple(preferredTrackId) : undefined;
       let kind: Preview["kind"] = "String ensemble";
 
-      if (!result || scoreResult(result, song) < 12) {
+      if (!result) {
+        const stringResults = await searchApple(`${song.title} ${song.composer} string quartet`);
+        result = [...stringResults].sort((a, b) => scoreResult(b, song) - scoreResult(a, song))[0];
+      }
+
+      if (!preferredTrackId && (!result || scoreResult(result, song) < 12)) {
         const fallbackResults = await searchApple(`${song.title} ${song.composer}`);
         result = [...fallbackResults].sort((a, b) => scoreResult(b, song) - scoreResult(a, song))[0];
         kind = "Original / closest match";
