@@ -1,64 +1,15 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { songs, type Category, type Song } from "./songs";
-
-type Preview = {
-  url: string;
-  artist: string;
-  collection: string;
-  track: string;
-  kind: "String ensemble" | "Original / closest match";
-};
-
-type AppleResult = {
-  artistName?: string;
-  collectionName?: string;
-  primaryGenreName?: string;
-  trackName?: string;
-  previewUrl?: string;
-};
+import { recordings, recordingKey } from "./recordings";
+import { songs, type Category } from "./songs";
 
 const filters: ("All" | Category)[] = ["All", "Classical", "Pop", "Entrance", "Recessional"];
-const preferredTrackIds: Record<string, number> = {
-  "entrance-0-bridal-chorus-here-comes-the-bride-": 664310930,
-};
-
-function scoreResult(result: AppleResult, song: Song) {
-  const text = `${result.trackName} ${result.artistName} ${result.collectionName} ${result.primaryGenreName}`.toLowerCase();
-  const significantWords = song.title.toLowerCase().split(/\W+/).filter((word) => word.length > 3);
-  const titleScore = significantWords.reduce((score, word) => score + (text.includes(word) ? 3 : 0), 0);
-  const stringScore = /(string|quartet|trio|duo|violin|cello|vitamin string)/.test(text) ? 12 : 0;
-  const instrumentalScore = /(instrumental|wedding|classical)/.test(text) ? 3 : 0;
-  const composer = song.composer.split(/\s+/).at(-1)?.toLowerCase() || "";
-  const composerScore = composer.length > 3 && text.includes(composer) ? 8 : 0;
-  const classicalGenreScore = /(classical|instrumental|easy listening)/.test(result.primaryGenreName?.toLowerCase() || "")
-    ? 8
-    : song.category === "Pop" ? 0 : -8;
-  return titleScore + stringScore + instrumentalScore + composerScore + classicalGenreScore;
-}
-
-async function searchApple(term: string) {
-  const response = await fetch(`https://itunes.apple.com/search?entity=song&limit=25&term=${encodeURIComponent(term)}`);
-  if (!response.ok) throw new Error("Preview search unavailable");
-  const data = await response.json() as { results: AppleResult[] };
-  return data.results.filter((result) => result.previewUrl);
-}
-
-async function lookupApple(trackId: number) {
-  const response = await fetch(`https://itunes.apple.com/lookup?id=${trackId}`);
-  if (!response.ok) throw new Error("Preview lookup unavailable");
-  const data = await response.json() as { results: AppleResult[] };
-  return data.results.find((result) => result.previewUrl);
-}
 
 export default function Home() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<(typeof filters)[number]>("All");
   const [active, setActive] = useState<string | null>(null);
-  const [previews, setPreviews] = useState<Record<string, Preview>>({});
-  const [loading, setLoading] = useState<string | null>(null);
-  const [errors, setErrors] = useState<Record<string, boolean>>({});
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -68,48 +19,12 @@ export default function Home() {
     );
   }, [query, filter]);
 
-  async function loadPreview(song: Song) {
-    if (active === song.id) {
+  function loadPreview(songId: string) {
+    if (active === songId) {
       setActive(null);
       return;
     }
-    setActive(song.id);
-    if (previews[song.id]) return;
-
-    setLoading(song.id);
-    setErrors((current) => ({ ...current, [song.id]: false }));
-    try {
-      const preferredTrackId = preferredTrackIds[song.id];
-      let result = preferredTrackId ? await lookupApple(preferredTrackId) : undefined;
-      let kind: Preview["kind"] = "String ensemble";
-
-      if (!result) {
-        const stringResults = await searchApple(`${song.title} ${song.composer} string quartet`);
-        result = [...stringResults].sort((a, b) => scoreResult(b, song) - scoreResult(a, song))[0];
-      }
-
-      if (!preferredTrackId && (!result || scoreResult(result, song) < 12)) {
-        const fallbackResults = await searchApple(`${song.title} ${song.composer}`);
-        result = [...fallbackResults].sort((a, b) => scoreResult(b, song) - scoreResult(a, song))[0];
-        kind = "Original / closest match";
-      }
-
-      if (!result?.previewUrl) throw new Error("No preview found");
-      setPreviews((current) => ({
-        ...current,
-        [song.id]: {
-          url: result.previewUrl!,
-          artist: result.artistName || "Unknown artist",
-          collection: result.collectionName || "Recording preview",
-          track: result.trackName || song.title,
-          kind,
-        },
-      }));
-    } catch {
-      setErrors((current) => ({ ...current, [song.id]: true }));
-    } finally {
-      setLoading(null);
-    }
+    setActive(songId);
   }
 
   return (
@@ -117,7 +32,7 @@ export default function Home() {
       <header className="hero" id="top">
         <nav>
           <a className="brand" href="#top">Vow <i>&amp;</i> Vibrato</a>
-          <span>{songs.length} selections · string-first previews</span>
+          <span>{songs.length} selections · verified string-first videos</span>
         </nav>
         <div className="hero-copy">
           <p className="eyebrow">A listening library for the aisle &amp; after</p>
@@ -155,7 +70,7 @@ export default function Home() {
         <div className="section-kicker"><span>02</span><p>Listen &amp; discover</p></div>
         <div className="catalog-head">
           <div><p className="eyebrow">The repertoire</p><h2 id="catalog-title">A song for<br />every moment</h2></div>
-          <p>Select any title to load a licensed recording preview. We search string ensembles first and identify when the closest available rendition is used.</p>
+          <p>Select any title to watch a reviewed YouTube performance. String duos, trios, and quartets are used whenever a credible match is available.</p>
         </div>
 
         <div className="controls">
@@ -168,21 +83,21 @@ export default function Home() {
         <p className="result-count">Showing {filtered.length} {filtered.length === 1 ? "selection" : "selections"}</p>
         <div className="song-list">
           {filtered.map((song, index) => {
-            const preview = previews[song.id];
+            const preview = recordings[recordingKey(song.title, song.composer)];
             const isActive = active === song.id;
             return <article className={`song ${isActive ? "expanded" : ""}`} key={song.id}>
               <div className="song-row">
                 <span className="number">{String(index + 1).padStart(2, "0")}</span>
-                <button className="play" onClick={() => loadPreview(song)} aria-label={`${isActive ? "Close" : "Listen to"} ${song.title}`}>{loading === song.id ? <span className="spinner" /> : isActive ? "×" : "▶"}</button>
+                <button className="play" onClick={() => loadPreview(song.id)} aria-label={`${isActive ? "Close" : "Listen to"} ${song.title}`}>{isActive ? "×" : "▶"}</button>
                 <div className="song-info"><h3>{song.title}</h3><p>{song.composer}</p></div>
                 <span className={`tag ${song.category.toLowerCase()}`}>{song.category}</span>
                 <span className="ensemble">Strings preferred <i>◌</i></span>
               </div>
               {isActive && <div className="inline-player">
                 {preview ? <>
-                  <div className="recording"><span>{preview.kind}</span><strong>{preview.track}</strong><p>{preview.artist} · {preview.collection}</p></div>
-                  <audio src={preview.url} controls autoPlay aria-label={`Audio preview of ${song.title}`} />
-                </> : errors[song.id] ? <div className="no-preview"><strong>Preview unavailable</strong><p>This recording could not be loaded right now. Try again in a moment.</p><button onClick={() => loadPreview(song)}>Try again</button></div> : <div className="finding"><span className="spinner" /><p>Finding the best available string recording…</p></div>}
+                  <div className="recording"><span>{preview.kind}</span><strong>{preview.title}</strong><p>{preview.channel}</p><a href={`https://www.youtube.com/watch?v=${preview.videoId}`} target="_blank" rel="noreferrer">Open on YouTube ↗</a></div>
+                  <div className="video-frame"><iframe src={`https://www.youtube-nocookie.com/embed/${preview.videoId}?autoplay=1&rel=0`} title={`${preview.title} performed by ${preview.channel}`} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen /></div>
+                </> : <div className="no-preview"><strong>No verified YouTube performance found</strong><p>This published arrangement could not be matched confidently, so no substitute recording is shown.</p></div>}
               </div>}
             </article>;
           })}
@@ -192,7 +107,7 @@ export default function Home() {
 
       <footer>
         <div><a className="brand" href="#top">Vow <i>&amp;</i> Vibrato</a><p>Beautiful music, thoughtfully chosen.</p></div>
-        <p>Recording previews provided by Apple Music. Availability may vary by region.</p>
+        <p>Performances are embedded from YouTube and may be subject to regional availability.</p>
         <a href="#top">Back to top ↑</a>
       </footer>
     </main>
